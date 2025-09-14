@@ -223,6 +223,7 @@ HWND g_notificationCenterWnd;
 int g_hotkeyId = 0;
 bool g_taskbarHidden = false;
 int g_originalTaskbarWidth = 0;
+DWORD g_lastToggleTime = 0;
 
 std::vector<winrt::weak_ref<XamlRoot>> g_notifyIconsUpdated;
 
@@ -540,8 +541,8 @@ bool RegisterTaskbarHotkey() {
         return false;
     }
 
-    // Use a unique ID for our hotkey
-    g_hotkeyId = 0x7E57; // "TEST" in hex-ish
+    // Use a unique ID for our hotkey - combination of mod name hash and a specific value
+    g_hotkeyId = 0x56545442; // "VTTB" (Vertical Taskbar Toggle Button) in hex
 
     if (!RegisterHotKey(nullptr, g_hotkeyId, hotkey.modifiers, hotkey.vk)) {
         Wh_Log(L"Failed to register hotkey, error: %d", GetLastError());
@@ -577,6 +578,10 @@ void ToggleTaskbarVisibility() {
         Wh_Log(L"Hiding taskbar, original width: %d", g_originalTaskbarWidth);
     } else {
         // Show the taskbar - restore original width
+        // If original width is 0 (shouldn't happen), use a reasonable default
+        if (g_originalTaskbarWidth <= 0) {
+            g_originalTaskbarWidth = 80; // Default taskbar width
+        }
         g_settings.taskbarWidth = g_originalTaskbarWidth;
         g_taskbarHidden = false;
         Wh_Log(L"Showing taskbar, restored width: %d", g_originalTaskbarWidth);
@@ -773,10 +778,16 @@ void TaskbarWndProcPreProcess(HWND hWnd,
                               LPARAM* lParam) {
     switch (Msg) {
         case WM_HOTKEY: {
-            // Handle our registered hotkey
+            // Handle our registered hotkey with debounce protection
             if ((int)*wParam == g_hotkeyId) {
-                Wh_Log(L"Hotkey pressed, toggling taskbar visibility");
-                ToggleTaskbarVisibility();
+                DWORD currentTime = GetTickCount();
+                if (currentTime - g_lastToggleTime > 300) { // 300ms debounce
+                    g_lastToggleTime = currentTime;
+                    Wh_Log(L"Hotkey pressed, toggling taskbar visibility");
+                    ToggleTaskbarVisibility();
+                } else {
+                    Wh_Log(L"Hotkey pressed too quickly, ignoring");
+                }
             }
             break;
         }
@@ -4366,11 +4377,22 @@ void Wh_ModUninit() {
 void Wh_ModSettingsChanged() {
     Wh_Log(L">");
 
+    // Save the old taskbar width if taskbar is currently hidden
+    int oldTaskbarWidth = g_settings.taskbarWidth;
+    
     LoadSettings();
 
     if (g_target == Target::Explorer) {
         // Re-register hotkey with new settings
         RegisterTaskbarHotkey();
+        
+        // If taskbar is hidden and user changed the width setting,
+        // update our stored original width
+        if (g_taskbarHidden && g_settings.taskbarWidth != oldTaskbarWidth) {
+            g_originalTaskbarWidth = g_settings.taskbarWidth;
+            g_settings.taskbarWidth = 1; // Keep it hidden with minimal width
+            Wh_Log(L"Updated original width to %d while taskbar hidden", g_originalTaskbarWidth);
+        }
         
         ApplySettings(/*waitForApply=*/false);
     } else if (g_target == Target::ShellExperienceHost ||
