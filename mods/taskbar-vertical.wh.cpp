@@ -126,12 +126,15 @@ With labels:
   $name: Toggle hide/show shortcut key
   $description: >-
     Keyboard shortcut to toggle taskbar hide/show state. Use standard key combination
-    format like "Ctrl+Alt+T", "Win+H", etc. Set to empty string to disable shortcut.
+    format like "Ctrl+Alt+T", "Win+H", "Shift+F1", etc. Supported keys: A-Z, 0-9, 
+    F1-F12, Space, Tab, Enter, Esc, Delete, Insert, Home, End, PageUp, PageDown.
+    Set to empty string to disable shortcut.
 - toggleTaskbarButton: false
-  $name: Toggle Hide/Show Taskbar
+  $name: Manual Toggle (Click to Apply)
   $description: >-
-    Click to manually toggle the taskbar visibility. This button immediately toggles
-    the taskbar hide/show state when the setting changes, useful for testing.
+    Toggle this setting to immediately hide/show the taskbar. This is a manual trigger -
+    changing this setting from false to true (or true to false) will toggle the taskbar
+    visibility. Perfect for testing without using the keyboard shortcut.
 */
 // ==/WindhawkModSettings==
 
@@ -214,6 +217,7 @@ std::atomic<int> g_hookCallCounter;
 ATOM g_hotkeyId = 0;
 HWND g_taskbarWnd = nullptr;
 bool g_previousToggleButtonState = false;
+bool g_settingsInitialized = false;
 
 int g_originalTaskbarHeight;
 bool g_inSystemTrayController_UpdateFrameSize;
@@ -3711,10 +3715,8 @@ void ParseAndRegisterHotkey(PCWSTR hotkeyStr) {
             vk = key;
         }
     } else {
-        // Special keys
-        if (wcscmp(keyPart, L"T") == 0 || wcscmp(keyPart, L"t") == 0) vk = L'T';
-        else if (wcscmp(keyPart, L"H") == 0 || wcscmp(keyPart, L"h") == 0) vk = L'H';
-        else if (wcscmp(keyPart, L"F1") == 0) vk = VK_F1;
+        // Special keys - more comprehensive mapping
+        if (wcscmp(keyPart, L"F1") == 0) vk = VK_F1;
         else if (wcscmp(keyPart, L"F2") == 0) vk = VK_F2;
         else if (wcscmp(keyPart, L"F3") == 0) vk = VK_F3;
         else if (wcscmp(keyPart, L"F4") == 0) vk = VK_F4;
@@ -3726,6 +3728,23 @@ void ParseAndRegisterHotkey(PCWSTR hotkeyStr) {
         else if (wcscmp(keyPart, L"F10") == 0) vk = VK_F10;
         else if (wcscmp(keyPart, L"F11") == 0) vk = VK_F11;
         else if (wcscmp(keyPart, L"F12") == 0) vk = VK_F12;
+        else if (wcscmp(keyPart, L"Space") == 0 || wcscmp(keyPart, L"space") == 0) vk = VK_SPACE;
+        else if (wcscmp(keyPart, L"Tab") == 0 || wcscmp(keyPart, L"tab") == 0) vk = VK_TAB;
+        else if (wcscmp(keyPart, L"Enter") == 0 || wcscmp(keyPart, L"enter") == 0) vk = VK_RETURN;
+        else if (wcscmp(keyPart, L"Esc") == 0 || wcscmp(keyPart, L"esc") == 0) vk = VK_ESCAPE;
+        else if (wcscmp(keyPart, L"Delete") == 0 || wcscmp(keyPart, L"delete") == 0) vk = VK_DELETE;
+        else if (wcscmp(keyPart, L"Insert") == 0 || wcscmp(keyPart, L"insert") == 0) vk = VK_INSERT;
+        else if (wcscmp(keyPart, L"Home") == 0 || wcscmp(keyPart, L"home") == 0) vk = VK_HOME;
+        else if (wcscmp(keyPart, L"End") == 0 || wcscmp(keyPart, L"end") == 0) vk = VK_END;
+        else if (wcscmp(keyPart, L"PageUp") == 0 || wcscmp(keyPart, L"pageup") == 0) vk = VK_PRIOR;
+        else if (wcscmp(keyPart, L"PageDown") == 0 || wcscmp(keyPart, L"pagedown") == 0) vk = VK_NEXT;
+        // Handle single-character keys that might be spelled out
+        else if (wcslen(keyPart) == 1) {
+            wchar_t key = towupper(keyPart[0]);
+            if ((key >= L'A' && key <= L'Z') || (key >= L'0' && key <= L'9')) {
+                vk = key;
+            }
+        }
     }
 
     if (vk != 0) {
@@ -3793,11 +3812,14 @@ void LoadSettings() {
     bool currentToggleButtonState = Wh_GetIntSetting(L"toggleTaskbarButton") != 0;
     g_settings.toggleTaskbarButton = currentToggleButtonState;
     
-    // Check if toggle button was activated (changed from false to true)
-    if (currentToggleButtonState && !g_previousToggleButtonState) {
+    // Check if toggle button state changed (any change triggers toggle)
+    // Only trigger after initial settings load to avoid unwanted toggles on startup
+    if (g_settingsInitialized && currentToggleButtonState != g_previousToggleButtonState) {
         ToggleTaskbarAutohide();
+        Wh_Log(L"Toggle button changed, triggering taskbar toggle");
     }
     g_previousToggleButtonState = currentToggleButtonState;
+    g_settingsInitialized = true;
 
     // Register hotkey
     ParseAndRegisterHotkey(g_settings.toggleShortcutKey);
