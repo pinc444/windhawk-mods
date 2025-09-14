@@ -434,6 +434,17 @@ TaskbarLocation GetTaskbarLocationForMonitor(HMONITOR monitor) {
                                      : g_settings.taskbarLocationSecondary;
 }
 
+
+// Forward declarations for hotkey functionality
+struct HotkeyInfo;
+bool ParseHotkeyString(const std::wstring& hotkeyStr, HotkeyInfo& hotkey);
+bool RegisterTaskbarHotkey();
+void UnregisterTaskbarHotkey();
+void ToggleTaskbarVisibility();
+HWND FindCurrentProcessTaskbarWnd();
+void ApplySettings(bool waitForApply);
+
+
 // Hotkey utility functions
 struct HotkeyInfo {
     UINT modifiers;
