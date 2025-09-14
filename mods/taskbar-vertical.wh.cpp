@@ -44,10 +44,24 @@ mod.
 
 ## Known limitations
 
-* The option to automatically hide the taskbar isn't supported.
+* ~~The option to automatically hide the taskbar isn't supported.~~ **Update**: Taskbar auto-hide toggling is now supported via keyboard shortcut and settings button!
 * After disabling the mod, some leftover artifacts might stay, such as
   incorrectly rotated icons. Restarting explorer.exe will clear all such
   leftovers.
+
+## New Feature: Taskbar Auto-Hide Toggle
+
+This mod now includes the ability to toggle the Windows taskbar auto-hide feature:
+
+* **Keyboard Shortcut**: Set a custom keyboard shortcut (default: Ctrl+Alt+T) to quickly toggle taskbar visibility
+* **Settings Button**: Use the "Toggle Hide/Show Taskbar" button in the mod settings for manual testing
+* **Easy Testing**: Perfect for testers who need to quickly switch between hidden and visible taskbar states
+
+### Usage
+
+1. **Keyboard Shortcut**: Configure your preferred key combination in the settings and use it anywhere to toggle the taskbar
+2. **Settings Button**: Toggle the "Toggle Hide/Show Taskbar" setting to immediately change the taskbar visibility state
+3. **Compatible**: Works seamlessly with the vertical taskbar positioning
 
 ## Funding
 
@@ -108,6 +122,16 @@ With labels:
     useful for a customized clock with a non-standard size
 
     Note: Disable and re-enable the mod to apply this option
+- toggleShortcutKey: "Ctrl+Alt+T"
+  $name: Toggle hide/show shortcut key
+  $description: >-
+    Keyboard shortcut to toggle taskbar hide/show state. Use standard key combination
+    format like "Ctrl+Alt+T", "Win+H", etc. Set to empty string to disable shortcut.
+- toggleTaskbarButton: false
+  $name: Toggle Hide/Show Taskbar
+  $description: >-
+    Click to manually toggle the taskbar visibility. This button immediately toggles
+    the taskbar hide/show state when the setting changes, useful for testing.
 */
 // ==/WindhawkModSettings==
 
@@ -116,6 +140,7 @@ With labels:
 #include <initguid.h>  // must come before uiautomation.h
 
 #include <dwmapi.h>
+#include <shellapi.h>
 #include <shellscalingapi.h>
 #include <uiautomation.h>
 #include <windowsx.h>
@@ -165,6 +190,8 @@ struct {
     StartMenuAlignment startMenuAlignment;
     int startMenuWidth;
     int clockContainerHeight;
+    PCWSTR toggleShortcutKey = nullptr;
+    bool toggleTaskbarButton = false;
 } g_settings;
 
 constexpr int kDefaultClockContainerHeight = 40;
@@ -182,6 +209,11 @@ std::atomic<bool> g_applyingSettings;
 std::atomic<bool> g_pendingMeasureOverride;
 std::atomic<bool> g_unloading;
 std::atomic<int> g_hookCallCounter;
+
+// Taskbar toggle functionality
+ATOM g_hotkeyId = 0;
+HWND g_taskbarWnd = nullptr;
+bool g_previousToggleButtonState = false;
 
 int g_originalTaskbarHeight;
 bool g_inSystemTrayController_UpdateFrameSize;
@@ -648,6 +680,14 @@ LRESULT TaskbarWndProcPostProcess(HWND hWnd,
                                   LPARAM lParam,
                                   LRESULT result) {
     switch (Msg) {
+        case WM_HOTKEY: {
+            if ((ATOM)wParam == g_hotkeyId) {
+                Wh_Log(L"Hotkey pressed - toggling taskbar autohide");
+                ToggleTaskbarAutohide();
+            }
+            break;
+        }
+
         case WM_SIZING: {
             Wh_Log(L"WM_SIZING: %08X", (DWORD)(ULONG_PTR)hWnd);
 
@@ -3581,6 +3621,128 @@ BOOL WINAPI SetWindowPos_Hook(HWND hWnd,
 
 }  // namespace CoreWindowUI
 
+// Taskbar toggle functionality
+HWND FindTaskbarWindow() {
+    if (g_taskbarWnd && IsWindow(g_taskbarWnd)) {
+        return g_taskbarWnd;
+    }
+    g_taskbarWnd = FindWindow(L"Shell_TrayWnd", nullptr);
+    return g_taskbarWnd;
+}
+
+bool GetTaskbarAutohideState() {
+    HWND hTaskbarWnd = FindTaskbarWindow();
+    if (!hTaskbarWnd) {
+        return false;
+    }
+
+    APPBARDATA msgData{};
+    msgData.cbSize = sizeof(msgData);
+    msgData.hWnd = hTaskbarWnd;
+    LPARAM state = SHAppBarMessage(ABM_GETSTATE, &msgData);
+    return (state & ABS_AUTOHIDE) != 0;
+}
+
+void SetTaskbarAutohide(bool enabled) {
+    HWND hTaskbarWnd = FindTaskbarWindow();
+    if (!hTaskbarWnd) {
+        return;
+    }
+
+    APPBARDATA msgData{};
+    msgData.cbSize = sizeof(msgData);
+    msgData.hWnd = hTaskbarWnd;
+    msgData.lParam = enabled ? ABS_AUTOHIDE : ABS_ALWAYSONTOP;
+    SHAppBarMessage(ABM_SETSTATE, &msgData);
+}
+
+void ToggleTaskbarAutohide() {
+    bool currentState = GetTaskbarAutohideState();
+    SetTaskbarAutohide(!currentState);
+    Wh_Log(L"Taskbar autohide toggled to: %s", !currentState ? L"enabled" : L"disabled");
+}
+
+// Parse hotkey string and register/unregister hotkey
+void ParseAndRegisterHotkey(PCWSTR hotkeyStr) {
+    // Unregister previous hotkey
+    if (g_hotkeyId != 0) {
+        UnregisterHotKey(nullptr, g_hotkeyId);
+        g_hotkeyId = 0;
+    }
+
+    // Skip if empty string
+    if (!hotkeyStr || wcslen(hotkeyStr) == 0) {
+        return;
+    }
+
+    // Parse hotkey string (simple implementation)
+    UINT modifiers = 0;
+    UINT vk = 0;
+    
+    // Check for modifiers
+    if (wcsstr(hotkeyStr, L"Ctrl") || wcsstr(hotkeyStr, L"ctrl")) {
+        modifiers |= MOD_CONTROL;
+    }
+    if (wcsstr(hotkeyStr, L"Alt") || wcsstr(hotkeyStr, L"alt")) {
+        modifiers |= MOD_ALT;
+    }
+    if (wcsstr(hotkeyStr, L"Shift") || wcsstr(hotkeyStr, L"shift")) {
+        modifiers |= MOD_SHIFT;
+    }
+    if (wcsstr(hotkeyStr, L"Win") || wcsstr(hotkeyStr, L"win")) {
+        modifiers |= MOD_WIN;
+    }
+
+    // Find the key part (after the last '+')
+    PCWSTR keyPart = wcsrchr(hotkeyStr, L'+');
+    if (keyPart) {
+        keyPart++; // Skip the '+'
+    } else {
+        keyPart = hotkeyStr;
+    }
+
+    // Map key name to virtual key code (simple implementation)
+    if (wcslen(keyPart) == 1) {
+        // Single character keys
+        wchar_t key = towupper(keyPart[0]);
+        if (key >= L'A' && key <= L'Z') {
+            vk = key;
+        } else if (key >= L'0' && key <= L'9') {
+            vk = key;
+        }
+    } else {
+        // Special keys
+        if (wcscmp(keyPart, L"T") == 0 || wcscmp(keyPart, L"t") == 0) vk = L'T';
+        else if (wcscmp(keyPart, L"H") == 0 || wcscmp(keyPart, L"h") == 0) vk = L'H';
+        else if (wcscmp(keyPart, L"F1") == 0) vk = VK_F1;
+        else if (wcscmp(keyPart, L"F2") == 0) vk = VK_F2;
+        else if (wcscmp(keyPart, L"F3") == 0) vk = VK_F3;
+        else if (wcscmp(keyPart, L"F4") == 0) vk = VK_F4;
+        else if (wcscmp(keyPart, L"F5") == 0) vk = VK_F5;
+        else if (wcscmp(keyPart, L"F6") == 0) vk = VK_F6;
+        else if (wcscmp(keyPart, L"F7") == 0) vk = VK_F7;
+        else if (wcscmp(keyPart, L"F8") == 0) vk = VK_F8;
+        else if (wcscmp(keyPart, L"F9") == 0) vk = VK_F9;
+        else if (wcscmp(keyPart, L"F10") == 0) vk = VK_F10;
+        else if (wcscmp(keyPart, L"F11") == 0) vk = VK_F11;
+        else if (wcscmp(keyPart, L"F12") == 0) vk = VK_F12;
+    }
+
+    if (vk != 0) {
+        // Generate unique hotkey ID
+        g_hotkeyId = GlobalAddAtom(L"TaskbarVerticalToggle");
+        if (g_hotkeyId != 0) {
+            if (!RegisterHotKey(nullptr, g_hotkeyId, modifiers, vk)) {
+                Wh_Log(L"Failed to register hotkey: %s", hotkeyStr);
+                GlobalDeleteAtom(g_hotkeyId);
+                g_hotkeyId = 0;
+            } else {
+                Wh_Log(L"Registered hotkey: %s", hotkeyStr);
+            }
+        }
+    }
+}
+
 void LoadSettings() {
     PCWSTR taskbarLocation = Wh_GetStringSetting(L"taskbarLocation");
     g_settings.taskbarLocation = TaskbarLocation::left;
@@ -3621,6 +3783,24 @@ void LoadSettings() {
 
     g_settings.startMenuWidth = Wh_GetIntSetting(L"startMenuWidth");
     g_settings.clockContainerHeight = Wh_GetIntSetting(L"clockContainerHeight");
+
+    // Load toggle settings
+    if (g_settings.toggleShortcutKey) {
+        Wh_FreeStringSetting(g_settings.toggleShortcutKey);
+    }
+    g_settings.toggleShortcutKey = Wh_GetStringSetting(L"toggleShortcutKey");
+    
+    bool currentToggleButtonState = Wh_GetIntSetting(L"toggleTaskbarButton") != 0;
+    g_settings.toggleTaskbarButton = currentToggleButtonState;
+    
+    // Check if toggle button was activated (changed from false to true)
+    if (currentToggleButtonState && !g_previousToggleButtonState) {
+        ToggleTaskbarAutohide();
+    }
+    g_previousToggleButtonState = currentToggleButtonState;
+
+    // Register hotkey
+    ParseAndRegisterHotkey(g_settings.toggleShortcutKey);
 }
 
 void ApplySettings(bool waitForApply = true) {
@@ -4149,6 +4329,19 @@ void Wh_ModBeforeUninit() {
 
 void Wh_ModUninit() {
     Wh_Log(L">");
+
+    // Cleanup hotkey
+    if (g_hotkeyId != 0) {
+        UnregisterHotKey(nullptr, g_hotkeyId);
+        GlobalDeleteAtom(g_hotkeyId);
+        g_hotkeyId = 0;
+    }
+
+    // Free the toggle shortcut key string
+    if (g_settings.toggleShortcutKey) {
+        Wh_FreeStringSetting(g_settings.toggleShortcutKey);
+        g_settings.toggleShortcutKey = nullptr;
+    }
 
     while (g_hookCallCounter > 0) {
         Sleep(100);
