@@ -81,6 +81,18 @@ This mod now includes the ability to toggle the Windows taskbar auto-hide featur
 2. **Settings Button**: Toggle the "Toggle Hide/Show Taskbar" setting to immediately change the taskbar visibility state
 3. **Compatible**: Works seamlessly with the vertical taskbar positioning
 
+### Debugging and Troubleshooting
+
+This mod includes comprehensive logging for troubleshooting issues:
+
+- **Hotkey Events**: All hotkey registrations, triggers, and failures are logged with detailed parameters
+- **Toggle Operations**: Manual toggle button presses and taskbar visibility changes are logged with state information  
+- **Initialization**: Startup, settings loading, and module initialization events are logged
+- **Error Handling**: Failed operations include error codes and context information
+
+**For Users**: Logs can be viewed in Windhawk's log viewer or external tools like DebugView
+**For Developers**: The `LogDebugInfo()` function outputs to both Windhawk logs and Windows debug output for comprehensive debugging
+
 ## Funding
 
 The development of this mod was funded by [AuthLite LLC](https://authlite.com/).
@@ -182,6 +194,7 @@ With labels:
 #include <list>
 #include <string>
 #include <vector>
+#include <cstdarg>  // For va_list
 
 #ifdef _M_ARM64
 #include <regex>
@@ -478,9 +491,26 @@ void ToggleTaskbarVisibility();
 HWND FindCurrentProcessTaskbarWnd();
 void ApplySettings(bool waitForApply);
 
+// Logging and debugging utilities
+void LogDebugInfo(const wchar_t* format, ...);
 
+
+// Logging and debugging utilities - Enhanced logging for troubleshooting
+// Maintainers: This logging system helps debug hotkey issues, toggle button problems,
+// and taskbar state changes. Logs are sent to Windhawk's debug output and can be viewed
+// in the Windhawk logs or using tools like DebugView.
+void LogDebugInfo(const wchar_t* format, ...) {
+    wchar_t buffer[1024];
+    va_list args;
+    va_start(args, format);
+    vswprintf_s(buffer, ARRAYSIZE(buffer), format, args);
+    va_end(args);
+    
+    Wh_Log(L"[VERTICAL-TASKBAR-DEBUG] %s", buffer);
+    OutputDebugStringW(buffer);
+    OutputDebugStringW(L"\n");
+}
 // Hotkey utility functions
-struct HotkeyInfo {
     UINT modifiers;
     UINT vk;
 };
@@ -577,47 +607,56 @@ bool ParseHotkeyString(const std::wstring& hotkeyStr, HotkeyInfo& hotkey) {
 bool RegisterTaskbarHotkey() {
     if (g_hotkeyId != 0) {
         UnregisterHotKey(nullptr, g_hotkeyId);
+        GlobalDeleteAtom(g_hotkeyId);
         g_hotkeyId = 0;
     }
 
+    // Use the correct setting - toggleShortcutKey instead of hideTaskbarShortcut
+    std::wstring hotkeyString = g_settings.toggleShortcutKey ? g_settings.toggleShortcutKey : L"Ctrl+Alt+T";
+    
+    LogDebugInfo(L"Attempting to register hotkey: %s", hotkeyString.c_str());
+
     HotkeyInfo hotkey;
-    if (!ParseHotkeyString(g_settings.hideTaskbarShortcut, hotkey)) {
-        Wh_Log(L"Failed to parse hotkey string: %s", g_settings.hideTaskbarShortcut.c_str());
+    if (!ParseHotkeyString(hotkeyString, hotkey)) {
+        LogDebugInfo(L"Failed to parse hotkey string: %s", hotkeyString.c_str());
         return false;
     }
 
     // Use GlobalAddAtom to get a unique ATOM ID for our hotkey
     g_hotkeyId = GlobalAddAtomW(L"VerticalTaskbarToggle_" WH_MOD_ID);
     if (g_hotkeyId == 0) {
-        Wh_Log(L"Failed to create hotkey atom, error: %d", GetLastError());
+        LogDebugInfo(L"Failed to create hotkey atom, error: %d", GetLastError());
         return false;
     }
 
     if (!RegisterHotKey(nullptr, g_hotkeyId, hotkey.modifiers, hotkey.vk)) {
-        Wh_Log(L"Failed to register hotkey, error: %d", GetLastError());
+        LogDebugInfo(L"Failed to register hotkey, error: %d", GetLastError());
         GlobalDeleteAtom(g_hotkeyId);
         g_hotkeyId = 0;
         return false;
     }
 
-    Wh_Log(L"Successfully registered hotkey: %s (id=%d)", 
-           g_settings.hideTaskbarShortcut.c_str(), g_hotkeyId);
+    LogDebugInfo(L"Successfully registered hotkey: %s (id=%d, modifiers=%d, vk=%d)", 
+           hotkeyString.c_str(), g_hotkeyId, hotkey.modifiers, hotkey.vk);
     return true;
 }
 
 void UnregisterTaskbarHotkey() {
     if (g_hotkeyId != 0) {
         UnregisterHotKey(nullptr, g_hotkeyId);
-        Wh_Log(L"Unregistered hotkey id=%d", g_hotkeyId);
+        LogDebugInfo(L"Unregistered hotkey id=%d", g_hotkeyId);
         GlobalDeleteAtom(g_hotkeyId);
         g_hotkeyId = 0;
     }
 }
 
 void ToggleTaskbarVisibility() {
+    LogDebugInfo(L"ToggleTaskbarVisibility called - Current state: %s", 
+                 g_taskbarHidden ? L"HIDDEN" : L"VISIBLE");
+
     HWND hTaskbarWnd = FindCurrentProcessTaskbarWnd();
     if (!hTaskbarWnd) {
-        Wh_Log(L"Failed to find taskbar window");
+        LogDebugInfo(L"ERROR: Failed to find taskbar window");
         return;
     }
 
@@ -626,7 +665,7 @@ void ToggleTaskbarVisibility() {
         g_originalTaskbarWidth = g_settings.taskbarWidth;
         g_settings.taskbarWidth = 1; // Minimal width
         g_taskbarHidden = true;
-        Wh_Log(L"Hiding taskbar, original width: %d", g_originalTaskbarWidth);
+        LogDebugInfo(L"HIDING taskbar - Original width: %d, setting to minimal width", g_originalTaskbarWidth);
     } else {
         // Show the taskbar - restore original width
         // If original width is 0 (shouldn't happen), use a reasonable default
@@ -635,11 +674,14 @@ void ToggleTaskbarVisibility() {
         }
         g_settings.taskbarWidth = g_originalTaskbarWidth;
         g_taskbarHidden = false;
-        Wh_Log(L"Showing taskbar, restored width: %d", g_originalTaskbarWidth);
+        LogDebugInfo(L"SHOWING taskbar - Restored width: %d", g_originalTaskbarWidth);
     }
 
     // Apply the changes
     ApplySettings(/*waitForApply=*/false);
+    
+    LogDebugInfo(L"ToggleTaskbarVisibility completed - New state: %s", 
+                 g_taskbarHidden ? L"HIDDEN" : L"VISIBLE");
 }
 
 using IconContainer_IsStorageRecreationRequired_t = bool(WINAPI*)(void* pThis,
@@ -829,16 +871,39 @@ void TaskbarWndProcPreProcess(HWND hWnd,
                               LPARAM* lParam) {
     switch (Msg) {
         case WM_HOTKEY: {
+            LogDebugInfo(L"WM_HOTKEY received - wParam: %d, expected hotkeyId: %d", (int)*wParam, (int)g_hotkeyId);
+            
             // Handle our registered hotkey with debounce protection
             if ((ATOM)*wParam == g_hotkeyId) {
                 DWORD currentTime = GetTickCount();
                 if (currentTime - g_lastToggleTime > 300) { // 300ms debounce
                     g_lastToggleTime = currentTime;
-                    Wh_Log(L"Hotkey pressed, toggling taskbar visibility");
+                    LogDebugInfo(L"HOTKEY TRIGGERED! Showing confirmation popup and toggling taskbar");
+                    
+                    // Show confirmation popup to user (as requested in requirements)
+                    std::wstring popupMessage = L"🔑 Vertical Taskbar Hotkey Triggered!\n\n";
+                    popupMessage += L"Hotkey: ";
+                    popupMessage += g_settings.toggleShortcutKey ? g_settings.toggleShortcutKey : L"Ctrl+Alt+T";
+                    popupMessage += L"\n";
+                    popupMessage += L"Current taskbar state: ";
+                    popupMessage += g_taskbarHidden ? L"HIDDEN" : L"VISIBLE";
+                    popupMessage += L"\n";
+                    popupMessage += L"Action: ";
+                    popupMessage += g_taskbarHidden ? L"SHOWING taskbar" : L"HIDING taskbar";
+                    popupMessage += L"\n\n";
+                    popupMessage += L"💡 This popup confirms your hotkey is working correctly.\n";
+                    popupMessage += L"Check Windhawk logs for detailed debug information.";
+                    
+                    MessageBoxW(nullptr, popupMessage.c_str(), 
+                               L"Vertical Taskbar - Debug Confirmation", 
+                               MB_OK | MB_ICONINFORMATION | MB_TOPMOST);
+                    
                     ToggleTaskbarVisibility();
                 } else {
-                    Wh_Log(L"Hotkey pressed too quickly, ignoring");
+                    LogDebugInfo(L"Hotkey pressed too quickly (debounce), ignoring");
                 }
+            } else {
+                LogDebugInfo(L"WM_HOTKEY received but atom doesn't match our hotkey");
             }
             break;
         }
@@ -903,9 +968,10 @@ LRESULT TaskbarWndProcPostProcess(HWND hWnd,
                                   LRESULT result) {
     switch (Msg) {
         case WM_HOTKEY: {
+            LogDebugInfo(L"WM_HOTKEY in PostProcess - wParam: %d, expected hotkeyId: %d", (int)wParam, (int)g_hotkeyId);
             if ((ATOM)wParam == g_hotkeyId) {
-                Wh_Log(L"Hotkey pressed - toggling taskbar autohide");
-                ToggleTaskbarVisibility();
+                LogDebugInfo(L"Hotkey match confirmed in PostProcess handler");
+                // Note: The actual handling is done in PreProcess to avoid duplication
             }
             break;
         }
@@ -3843,104 +3909,9 @@ BOOL WINAPI SetWindowPos_Hook(HWND hWnd,
 
 }  // namespace CoreWindowUI
 
-// Parse hotkey string and register/unregister hotkey
-void ParseAndRegisterHotkey(PCWSTR hotkeyStr) {
-    // Unregister previous hotkey
-    if (g_hotkeyId != 0) {
-        UnregisterHotKey(nullptr, g_hotkeyId);
-        GlobalDeleteAtom(g_hotkeyId);
-        g_hotkeyId = 0;
-    }
-
-    // Skip if empty string
-    if (!hotkeyStr || wcslen(hotkeyStr) == 0) {
-        return;
-    }
-
-    // Parse hotkey string (simple implementation)
-    UINT modifiers = 0;
-    UINT vk = 0;
-    
-    // Check for modifiers
-    if (wcsstr(hotkeyStr, L"Ctrl") || wcsstr(hotkeyStr, L"ctrl")) {
-        modifiers |= MOD_CONTROL;
-    }
-    if (wcsstr(hotkeyStr, L"Alt") || wcsstr(hotkeyStr, L"alt")) {
-        modifiers |= MOD_ALT;
-    }
-    if (wcsstr(hotkeyStr, L"Shift") || wcsstr(hotkeyStr, L"shift")) {
-        modifiers |= MOD_SHIFT;
-    }
-    if (wcsstr(hotkeyStr, L"Win") || wcsstr(hotkeyStr, L"win")) {
-        modifiers |= MOD_WIN;
-    }
-
-    // Find the key part (after the last '+')
-    PCWSTR keyPart = wcsrchr(hotkeyStr, L'+');
-    if (keyPart) {
-        keyPart++; // Skip the '+'
-    } else {
-        keyPart = hotkeyStr;
-    }
-
-    // Map key name to virtual key code (simple implementation)
-    if (wcslen(keyPart) == 1) {
-        // Single character keys
-        wchar_t key = towupper(keyPart[0]);
-        if (key >= L'A' && key <= L'Z') {
-            vk = key;
-        } else if (key >= L'0' && key <= L'9') {
-            vk = key;
-        }
-    } else {
-        // Special keys - more comprehensive mapping
-        if (wcscmp(keyPart, L"F1") == 0) vk = VK_F1;
-        else if (wcscmp(keyPart, L"F2") == 0) vk = VK_F2;
-        else if (wcscmp(keyPart, L"F3") == 0) vk = VK_F3;
-        else if (wcscmp(keyPart, L"F4") == 0) vk = VK_F4;
-        else if (wcscmp(keyPart, L"F5") == 0) vk = VK_F5;
-        else if (wcscmp(keyPart, L"F6") == 0) vk = VK_F6;
-        else if (wcscmp(keyPart, L"F7") == 0) vk = VK_F7;
-        else if (wcscmp(keyPart, L"F8") == 0) vk = VK_F8;
-        else if (wcscmp(keyPart, L"F9") == 0) vk = VK_F9;
-        else if (wcscmp(keyPart, L"F10") == 0) vk = VK_F10;
-        else if (wcscmp(keyPart, L"F11") == 0) vk = VK_F11;
-        else if (wcscmp(keyPart, L"F12") == 0) vk = VK_F12;
-        else if (wcscmp(keyPart, L"Space") == 0 || wcscmp(keyPart, L"space") == 0) vk = VK_SPACE;
-        else if (wcscmp(keyPart, L"Tab") == 0 || wcscmp(keyPart, L"tab") == 0) vk = VK_TAB;
-        else if (wcscmp(keyPart, L"Enter") == 0 || wcscmp(keyPart, L"enter") == 0) vk = VK_RETURN;
-        else if (wcscmp(keyPart, L"Esc") == 0 || wcscmp(keyPart, L"esc") == 0) vk = VK_ESCAPE;
-        else if (wcscmp(keyPart, L"Delete") == 0 || wcscmp(keyPart, L"delete") == 0) vk = VK_DELETE;
-        else if (wcscmp(keyPart, L"Insert") == 0 || wcscmp(keyPart, L"insert") == 0) vk = VK_INSERT;
-        else if (wcscmp(keyPart, L"Home") == 0 || wcscmp(keyPart, L"home") == 0) vk = VK_HOME;
-        else if (wcscmp(keyPart, L"End") == 0 || wcscmp(keyPart, L"end") == 0) vk = VK_END;
-        else if (wcscmp(keyPart, L"PageUp") == 0 || wcscmp(keyPart, L"pageup") == 0) vk = VK_PRIOR;
-        else if (wcscmp(keyPart, L"PageDown") == 0 || wcscmp(keyPart, L"pagedown") == 0) vk = VK_NEXT;
-        // Handle single-character keys that might be spelled out
-        else if (wcslen(keyPart) == 1) {
-            wchar_t key = towupper(keyPart[0]);
-            if ((key >= L'A' && key <= L'Z') || (key >= L'0' && key <= L'9')) {
-                vk = key;
-            }
-        }
-    }
-
-    if (vk != 0) {
-        // Generate unique hotkey ID using GlobalAddAtom
-        g_hotkeyId = GlobalAddAtomW(L"TaskbarVerticalToggle");
-        if (g_hotkeyId != 0) {
-            if (!RegisterHotKey(nullptr, g_hotkeyId, modifiers, vk)) {
-                Wh_Log(L"Failed to register hotkey: %s", hotkeyStr);
-                GlobalDeleteAtom(g_hotkeyId);
-                g_hotkeyId = 0;
-            } else {
-                Wh_Log(L"Registered hotkey: %s", hotkeyStr);
-            }
-        }
-    }
-}
-
 void LoadSettings() {
+    LogDebugInfo(L"LoadSettings called");
+
     PCWSTR taskbarLocation = Wh_GetStringSetting(L"taskbarLocation");
     g_settings.taskbarLocation = TaskbarLocation::left;
     if (wcscmp(taskbarLocation, L"right") == 0) {
@@ -3990,22 +3961,27 @@ void LoadSettings() {
     bool currentToggleButtonState = Wh_GetIntSetting(L"toggleTaskbarButton") != 0;
     g_settings.toggleTaskbarButton = currentToggleButtonState;
     
+    LogDebugInfo(L"Loading settings - toggleShortcutKey: %s, toggleTaskbarButton: %s, previousState: %s", 
+                 g_settings.toggleShortcutKey ? g_settings.toggleShortcutKey : L"(null)",
+                 currentToggleButtonState ? L"true" : L"false",
+                 g_previousToggleButtonState ? L"true" : L"false");
+    
     // Check if toggle button state changed (any change triggers toggle)
     // Only trigger after initial settings load to avoid unwanted toggles on startup
     if (g_settingsInitialized && currentToggleButtonState != g_previousToggleButtonState) {
+        LogDebugInfo(L"MANUAL TOGGLE BUTTON PRESSED - State changed from %s to %s", 
+                     g_previousToggleButtonState ? L"true" : L"false",
+                     currentToggleButtonState ? L"true" : L"false");
         ToggleTaskbarVisibility();
-        Wh_Log(L"Toggle button changed, triggering taskbar toggle");
     }
     g_previousToggleButtonState = currentToggleButtonState;
     g_settingsInitialized = true;
 
-    // Register hotkey
-    ParseAndRegisterHotkey(g_settings.toggleShortcutKey);
+    // Use the unified hotkey registration function (remove the old ParseAndRegisterHotkey call)
+    RegisterTaskbarHotkey();
 
-    PCWSTR hideTaskbarShortcut = Wh_GetStringSetting(L"hideTaskbarShortcut");
-    g_settings.hideTaskbarShortcut = hideTaskbarShortcut ? hideTaskbarShortcut : L"Ctrl+Shift+T";
-    Wh_FreeStringSetting(hideTaskbarShortcut);
-
+    LogDebugInfo(L"LoadSettings completed - taskbarWidth: %d, taskbarHidden: %s", 
+                 g_settings.taskbarWidth, g_taskbarHidden ? L"true" : L"false");
 }
 
 void ApplySettings(bool waitForApply = true) {
@@ -4362,7 +4338,7 @@ bool HookTaskbarDllSymbols() {
 }
 
 BOOL Wh_ModInit() {
-    Wh_Log(L">");
+    LogDebugInfo(L"Wh_ModInit starting - Vertical Taskbar Mod initialization");
 
     LoadSettings();
 
@@ -4373,7 +4349,7 @@ BOOL Wh_ModInit() {
         GetModuleFileName(nullptr, moduleFilePath, ARRAYSIZE(moduleFilePath))) {
         case 0:
         case ARRAYSIZE(moduleFilePath):
-            Wh_Log(L"GetModuleFileName failed");
+            LogDebugInfo(L"GetModuleFileName failed");
             break;
 
         default:
@@ -4384,8 +4360,9 @@ BOOL Wh_ModInit() {
                 } else if (_wcsicmp(moduleFileName, L"ShellHost.exe") == 0) {
                     g_target = Target::ShellHost;
                 }
+                LogDebugInfo(L"Target process: %s", moduleFileName);
             } else {
-                Wh_Log(L"GetModuleFileName returned an unsupported path");
+                LogDebugInfo(L"GetModuleFileName returned an unsupported path");
             }
             break;
     }
@@ -4395,16 +4372,18 @@ BOOL Wh_ModInit() {
         WindhawkUtils::SetFunctionHook(SetWindowPos,
                                        CoreWindowUI::SetWindowPos_Hook,
                                        &SetWindowPos_Original);
+        LogDebugInfo(L"Wh_ModInit completed for ShellExperienceHost/ShellHost");
         return TRUE;
     }
 
     if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
         g_taskbarViewDllLoaded = true;
         if (!HookTaskbarViewDllSymbols(taskbarViewModule)) {
+            LogDebugInfo(L"ERROR: Failed to hook TaskbarView symbols");
             return FALSE;
         }
     } else {
-        Wh_Log(L"Taskbar view module not loaded yet");
+        LogDebugInfo(L"Taskbar view module not loaded yet, setting up LoadLibraryEx hook");
 
         HMODULE kernelBaseModule = GetModuleHandle(L"kernelbase.dll");
         auto pKernelBaseLoadLibraryExW =
@@ -4416,6 +4395,7 @@ BOOL Wh_ModInit() {
     }
 
     if (!HookTaskbarDllSymbols()) {
+        LogDebugInfo(L"ERROR: Failed to hook Taskbar.dll symbols");
         return FALSE;
     }
 
@@ -4443,37 +4423,46 @@ BOOL Wh_ModInit() {
         }
     }
 
-    // Register global hotkey for Explorer target only
-    RegisterTaskbarHotkey();
+    // Register global hotkey for Explorer target only - this is critical for the fix
+    bool hotkeyResult = RegisterTaskbarHotkey();
+    LogDebugInfo(L"Initial hotkey registration result: %s", hotkeyResult ? L"SUCCESS" : L"FAILED");
 
+    LogDebugInfo(L"Wh_ModInit completed successfully");
     return TRUE;
 }
 
 void Wh_ModAfterInit() {
-    Wh_Log(L">");
+    LogDebugInfo(L"Wh_ModAfterInit starting");
 
     if (g_target == Target::Explorer) {
         if (!g_taskbarViewDllLoaded) {
             if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
                 if (!g_taskbarViewDllLoaded.exchange(true)) {
-                    Wh_Log(L"Got Taskbar.View.dll");
+                    LogDebugInfo(L"Loading Taskbar.View.dll module");
 
                     if (HookTaskbarViewDllSymbols(taskbarViewModule)) {
                         Wh_ApplyHookOperations();
+                        LogDebugInfo(L"Successfully hooked TaskbarView symbols");
+                    } else {
+                        LogDebugInfo(L"ERROR: Failed to hook TaskbarView symbols");
                     }
                 }
             }
         }
 
         ApplySettings();
+        LogDebugInfo(L"Applied settings for Explorer target");
     } else if (g_target == Target::ShellExperienceHost ||
                g_target == Target::ShellHost) {
         CoreWindowUI::ApplySettings();
+        LogDebugInfo(L"Applied settings for ShellExperienceHost/ShellHost target");
     }
+    
+    LogDebugInfo(L"Wh_ModAfterInit completed");
 }
 
 void Wh_ModBeforeUninit() {
-    Wh_Log(L">");
+    LogDebugInfo(L"Wh_ModBeforeUninit starting - preparing for cleanup");
 
     g_unloading = true;
 
@@ -4483,6 +4472,7 @@ void Wh_ModBeforeUninit() {
         
         // Restore taskbar to visible state if it's hidden
         if (g_taskbarHidden) {
+            LogDebugInfo(L"Restoring taskbar visibility before uninit (was hidden)");
             g_settings.taskbarWidth = g_originalTaskbarWidth;
             g_taskbarHidden = false;
         }
@@ -4507,6 +4497,7 @@ void Wh_ModBeforeUninit() {
 
                 SetWindowPos_Original(g_startMenuWnd, nullptr, x, y, cx, cy,
                                       SWP_NOZORDER | SWP_NOACTIVATE);
+                LogDebugInfo(L"Restored start menu position");
             }
         }
 
@@ -4530,6 +4521,7 @@ void Wh_ModBeforeUninit() {
 
                 SetWindowPos_Original(g_notificationCenterWnd, nullptr, x, y,
                                       cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);
+                LogDebugInfo(L"Restored notification center position");
             }
         }
 
@@ -4538,19 +4530,24 @@ void Wh_ModBeforeUninit() {
         // This is required to give time for taskbar buttons of UWP apps to
         // update the layout.
         Sleep(400);
+        LogDebugInfo(L"Completed cleanup for Explorer target");
     } else if (g_target == Target::ShellExperienceHost ||
                g_target == Target::ShellHost) {
         CoreWindowUI::ApplySettings();
+        LogDebugInfo(L"Completed cleanup for ShellExperienceHost/ShellHost target");
     }
+    
+    LogDebugInfo(L"Wh_ModBeforeUninit completed");
 }
 
 void Wh_ModUninit() {
-    Wh_Log(L">");
+    LogDebugInfo(L"Wh_ModUninit starting - cleaning up resources");
 
     // Cleanup hotkey
     if (g_hotkeyId != 0) {
         UnregisterHotKey(nullptr, g_hotkeyId);
         GlobalDeleteAtom(g_hotkeyId);
+        LogDebugInfo(L"Cleaned up hotkey id=%d", g_hotkeyId);
         g_hotkeyId = 0;
     }
 
@@ -4558,15 +4555,19 @@ void Wh_ModUninit() {
     if (g_settings.toggleShortcutKey) {
         Wh_FreeStringSetting(g_settings.toggleShortcutKey);
         g_settings.toggleShortcutKey = nullptr;
+        LogDebugInfo(L"Freed toggle shortcut key string");
     }
 
     while (g_hookCallCounter > 0) {
+        LogDebugInfo(L"Waiting for %d hook calls to complete", (int)g_hookCallCounter);
         Sleep(100);
     }
+    
+    LogDebugInfo(L"Wh_ModUninit completed");
 }
 
 void Wh_ModSettingsChanged() {
-    Wh_Log(L">");
+    LogDebugInfo(L"Wh_ModSettingsChanged called - reloading settings");
 
     // Save the old taskbar width if taskbar is currently hidden
     int oldTaskbarWidth = g_settings.taskbarWidth;
@@ -4575,19 +4576,24 @@ void Wh_ModSettingsChanged() {
 
     if (g_target == Target::Explorer) {
         // Re-register hotkey with new settings
-        RegisterTaskbarHotkey();
+        bool hotkeyResult = RegisterTaskbarHotkey();
+        LogDebugInfo(L"Hotkey re-registration result: %s", hotkeyResult ? L"SUCCESS" : L"FAILED");
         
         // If taskbar is hidden and user changed the width setting,
         // update our stored original width
         if (g_taskbarHidden && g_settings.taskbarWidth != oldTaskbarWidth) {
             g_originalTaskbarWidth = g_settings.taskbarWidth;
             g_settings.taskbarWidth = 1; // Keep it hidden with minimal width
-            Wh_Log(L"Updated original width to %d while taskbar hidden", g_originalTaskbarWidth);
+            LogDebugInfo(L"Updated original width to %d while taskbar hidden", g_originalTaskbarWidth);
         }
         
         ApplySettings(/*waitForApply=*/false);
+        LogDebugInfo(L"Settings applied for Explorer target");
     } else if (g_target == Target::ShellExperienceHost ||
                g_target == Target::ShellHost) {
         CoreWindowUI::ApplySettings();
+        LogDebugInfo(L"Settings applied for ShellExperienceHost/ShellHost target");
     }
+    
+    LogDebugInfo(L"Wh_ModSettingsChanged completed");
 }
