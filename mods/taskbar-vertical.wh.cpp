@@ -81,6 +81,18 @@ This mod now includes the ability to toggle the Windows taskbar auto-hide featur
 2. **Settings Button**: Toggle the "Toggle Hide/Show Taskbar" setting to immediately change the taskbar visibility state
 3. **Compatible**: Works seamlessly with the vertical taskbar positioning
 
+### Debugging and Troubleshooting
+
+This mod includes comprehensive logging for troubleshooting issues:
+
+- **Hotkey Events**: All hotkey registrations, triggers, and failures are logged with detailed parameters
+- **Toggle Operations**: Manual toggle button presses and taskbar visibility changes are logged with state information  
+- **Initialization**: Startup, settings loading, and module initialization events are logged
+- **Error Handling**: Failed operations include error codes and context information
+
+**For Users**: Logs can be viewed in Windhawk's log viewer or external tools like DebugView
+**For Developers**: The `LogDebugInfo()` function outputs to both Windhawk logs and Windows debug output for comprehensive debugging
+
 ## Funding
 
 The development of this mod was funded by [AuthLite LLC](https://authlite.com/).
@@ -869,14 +881,21 @@ void TaskbarWndProcPreProcess(HWND hWnd,
                     LogDebugInfo(L"HOTKEY TRIGGERED! Showing confirmation popup and toggling taskbar");
                     
                     // Show confirmation popup to user (as requested in requirements)
-                    std::wstring popupMessage = L"Hotkey pressed: ";
+                    std::wstring popupMessage = L"🔑 Vertical Taskbar Hotkey Triggered!\n\n";
+                    popupMessage += L"Hotkey: ";
                     popupMessage += g_settings.toggleShortcutKey ? g_settings.toggleShortcutKey : L"Ctrl+Alt+T";
-                    popupMessage += L"\n\nToggling taskbar visibility...";
-                    popupMessage += L"\nCurrent state: ";
+                    popupMessage += L"\n";
+                    popupMessage += L"Current taskbar state: ";
                     popupMessage += g_taskbarHidden ? L"HIDDEN" : L"VISIBLE";
+                    popupMessage += L"\n";
+                    popupMessage += L"Action: ";
+                    popupMessage += g_taskbarHidden ? L"SHOWING taskbar" : L"HIDING taskbar";
+                    popupMessage += L"\n\n";
+                    popupMessage += L"💡 This popup confirms your hotkey is working correctly.\n";
+                    popupMessage += L"Check Windhawk logs for detailed debug information.";
                     
                     MessageBoxW(nullptr, popupMessage.c_str(), 
-                               L"Vertical Taskbar - Hotkey Triggered", 
+                               L"Vertical Taskbar - Debug Confirmation", 
                                MB_OK | MB_ICONINFORMATION | MB_TOPMOST);
                     
                     ToggleTaskbarVisibility();
@@ -4413,30 +4432,37 @@ BOOL Wh_ModInit() {
 }
 
 void Wh_ModAfterInit() {
-    Wh_Log(L">");
+    LogDebugInfo(L"Wh_ModAfterInit starting");
 
     if (g_target == Target::Explorer) {
         if (!g_taskbarViewDllLoaded) {
             if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
                 if (!g_taskbarViewDllLoaded.exchange(true)) {
-                    Wh_Log(L"Got Taskbar.View.dll");
+                    LogDebugInfo(L"Loading Taskbar.View.dll module");
 
                     if (HookTaskbarViewDllSymbols(taskbarViewModule)) {
                         Wh_ApplyHookOperations();
+                        LogDebugInfo(L"Successfully hooked TaskbarView symbols");
+                    } else {
+                        LogDebugInfo(L"ERROR: Failed to hook TaskbarView symbols");
                     }
                 }
             }
         }
 
         ApplySettings();
+        LogDebugInfo(L"Applied settings for Explorer target");
     } else if (g_target == Target::ShellExperienceHost ||
                g_target == Target::ShellHost) {
         CoreWindowUI::ApplySettings();
+        LogDebugInfo(L"Applied settings for ShellExperienceHost/ShellHost target");
     }
+    
+    LogDebugInfo(L"Wh_ModAfterInit completed");
 }
 
 void Wh_ModBeforeUninit() {
-    Wh_Log(L">");
+    LogDebugInfo(L"Wh_ModBeforeUninit starting - preparing for cleanup");
 
     g_unloading = true;
 
@@ -4446,6 +4472,7 @@ void Wh_ModBeforeUninit() {
         
         // Restore taskbar to visible state if it's hidden
         if (g_taskbarHidden) {
+            LogDebugInfo(L"Restoring taskbar visibility before uninit (was hidden)");
             g_settings.taskbarWidth = g_originalTaskbarWidth;
             g_taskbarHidden = false;
         }
@@ -4470,6 +4497,7 @@ void Wh_ModBeforeUninit() {
 
                 SetWindowPos_Original(g_startMenuWnd, nullptr, x, y, cx, cy,
                                       SWP_NOZORDER | SWP_NOACTIVATE);
+                LogDebugInfo(L"Restored start menu position");
             }
         }
 
@@ -4493,6 +4521,7 @@ void Wh_ModBeforeUninit() {
 
                 SetWindowPos_Original(g_notificationCenterWnd, nullptr, x, y,
                                       cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);
+                LogDebugInfo(L"Restored notification center position");
             }
         }
 
@@ -4501,19 +4530,24 @@ void Wh_ModBeforeUninit() {
         // This is required to give time for taskbar buttons of UWP apps to
         // update the layout.
         Sleep(400);
+        LogDebugInfo(L"Completed cleanup for Explorer target");
     } else if (g_target == Target::ShellExperienceHost ||
                g_target == Target::ShellHost) {
         CoreWindowUI::ApplySettings();
+        LogDebugInfo(L"Completed cleanup for ShellExperienceHost/ShellHost target");
     }
+    
+    LogDebugInfo(L"Wh_ModBeforeUninit completed");
 }
 
 void Wh_ModUninit() {
-    Wh_Log(L">");
+    LogDebugInfo(L"Wh_ModUninit starting - cleaning up resources");
 
     // Cleanup hotkey
     if (g_hotkeyId != 0) {
         UnregisterHotKey(nullptr, g_hotkeyId);
         GlobalDeleteAtom(g_hotkeyId);
+        LogDebugInfo(L"Cleaned up hotkey id=%d", g_hotkeyId);
         g_hotkeyId = 0;
     }
 
@@ -4521,15 +4555,19 @@ void Wh_ModUninit() {
     if (g_settings.toggleShortcutKey) {
         Wh_FreeStringSetting(g_settings.toggleShortcutKey);
         g_settings.toggleShortcutKey = nullptr;
+        LogDebugInfo(L"Freed toggle shortcut key string");
     }
 
     while (g_hookCallCounter > 0) {
+        LogDebugInfo(L"Waiting for %d hook calls to complete", (int)g_hookCallCounter);
         Sleep(100);
     }
+    
+    LogDebugInfo(L"Wh_ModUninit completed");
 }
 
 void Wh_ModSettingsChanged() {
-    Wh_Log(L">");
+    LogDebugInfo(L"Wh_ModSettingsChanged called - reloading settings");
 
     // Save the old taskbar width if taskbar is currently hidden
     int oldTaskbarWidth = g_settings.taskbarWidth;
@@ -4538,19 +4576,24 @@ void Wh_ModSettingsChanged() {
 
     if (g_target == Target::Explorer) {
         // Re-register hotkey with new settings
-        RegisterTaskbarHotkey();
+        bool hotkeyResult = RegisterTaskbarHotkey();
+        LogDebugInfo(L"Hotkey re-registration result: %s", hotkeyResult ? L"SUCCESS" : L"FAILED");
         
         // If taskbar is hidden and user changed the width setting,
         // update our stored original width
         if (g_taskbarHidden && g_settings.taskbarWidth != oldTaskbarWidth) {
             g_originalTaskbarWidth = g_settings.taskbarWidth;
             g_settings.taskbarWidth = 1; // Keep it hidden with minimal width
-            Wh_Log(L"Updated original width to %d while taskbar hidden", g_originalTaskbarWidth);
+            LogDebugInfo(L"Updated original width to %d while taskbar hidden", g_originalTaskbarWidth);
         }
         
         ApplySettings(/*waitForApply=*/false);
+        LogDebugInfo(L"Settings applied for Explorer target");
     } else if (g_target == Target::ShellExperienceHost ||
                g_target == Target::ShellHost) {
         CoreWindowUI::ApplySettings();
+        LogDebugInfo(L"Settings applied for ShellExperienceHost/ShellHost target");
     }
+    
+    LogDebugInfo(L"Wh_ModSettingsChanged completed");
 }
