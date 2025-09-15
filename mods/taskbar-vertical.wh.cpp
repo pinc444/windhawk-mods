@@ -483,7 +483,10 @@ TaskbarLocation GetTaskbarLocationForMonitor(HMONITOR monitor) {
 
 
 // Forward declarations for hotkey functionality
-struct HotkeyInfo;
+struct HotkeyInfo {
+    UINT modifiers;
+    UINT vk;
+};
 bool ParseHotkeyString(const std::wstring& hotkeyStr, HotkeyInfo& hotkey);
 bool RegisterTaskbarHotkey();
 void UnregisterTaskbarHotkey();
@@ -511,9 +514,6 @@ void LogDebugInfo(const wchar_t* format, ...) {
     OutputDebugStringW(L"\n");
 }
 // Hotkey utility functions
-    UINT modifiers;
-    UINT vk;
-};
 
 bool ParseHotkeyString(const std::wstring& hotkeyStr, HotkeyInfo& hotkey) {
     if (hotkeyStr.empty()) {
