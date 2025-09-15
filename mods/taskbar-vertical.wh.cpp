@@ -280,9 +280,6 @@ bool g_taskbarHidden = false;
 int g_originalTaskbarWidth = 0;
 DWORD g_lastToggleTime = 0;
 
-// Toggle button functionality - Track when settings were last changed to avoid duplicate toggles
-DWORD g_lastSettingsChangeTime = 0;
-
 std::vector<winrt::weak_ref<XamlRoot>> g_notifyIconsUpdated;
 
 using FrameworkElementLoadedEventRevoker = winrt::impl::event_revoker<
@@ -3966,33 +3963,15 @@ void LoadSettings() {
                  currentToggleButtonState ? L"true" : L"false",
                  g_previousToggleButtonState ? L"true" : L"false");
     
-    // BUG FIX: Improved toggle button logic
-    // The issue was that the toggle button only worked on boolean state changes,
-    // making it unusable after the first toggle. Now we check if the setting
-    // was changed recently (within 1 second) and if the button state is true,
-    // we trigger a toggle. This allows the button to be used repeatedly.
-    DWORD currentTime = GetTickCount();
-    bool shouldTriggerToggle = false;
-    
-    if (g_settingsInitialized) {
-        // If button is currently true and we haven't processed a toggle very recently
-        if (currentToggleButtonState && (currentTime - g_lastSettingsChangeTime > 100)) {
-            shouldTriggerToggle = true;
-            g_lastSettingsChangeTime = currentTime;
-            LogDebugInfo(L"MANUAL TOGGLE BUTTON TRIGGERED - Button state is true, triggering toggle");
-        } 
-        // Also handle the original logic for state changes (for backward compatibility)
-        else if (currentToggleButtonState != g_previousToggleButtonState) {
-            shouldTriggerToggle = true;
-            g_lastSettingsChangeTime = currentTime;
-            LogDebugInfo(L"MANUAL TOGGLE BUTTON PRESSED - State changed from %s to %s", 
-                         g_previousToggleButtonState ? L"true" : L"false",
-                         currentToggleButtonState ? L"true" : L"false");
-        }
-        
-        if (shouldTriggerToggle) {
-            ToggleTaskbarVisibility();
-        }
+    // BUG FIX: Fixed toggle button logic
+    // The issue was that the button only worked on state changes, but there was a bug
+    // in the logic. The button should work on ANY state change (true->false OR false->true).
+    // This allows users to toggle the checkbox back and forth to trigger the action.
+    if (g_settingsInitialized && currentToggleButtonState != g_previousToggleButtonState) {
+        LogDebugInfo(L"MANUAL TOGGLE BUTTON PRESSED - State changed from %s to %s", 
+                     g_previousToggleButtonState ? L"true" : L"false",
+                     currentToggleButtonState ? L"true" : L"false");
+        ToggleTaskbarVisibility();
     }
     g_previousToggleButtonState = currentToggleButtonState;
     g_settingsInitialized = true;
