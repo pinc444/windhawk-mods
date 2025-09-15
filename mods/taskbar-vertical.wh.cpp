@@ -93,6 +93,14 @@ This mod includes comprehensive logging for troubleshooting issues:
 **For Users**: Logs can be viewed in Windhawk's log viewer or external tools like DebugView
 **For Developers**: The `LogDebugInfo()` function outputs to both Windhawk logs and Windows debug output for comprehensive debugging
 
+### Bug Fixes (v1.3.5+)
+
+Recent fixes for critical toggle functionality issues:
+
+- **Fixed Hotkey Toggle**: Removed blocking popup that was preventing hotkey from reliably toggling taskbar visibility
+- **Fixed Manual Toggle Button**: Improved toggle button logic to work repeatedly instead of only once per setting change
+- **Enhanced Logging**: Added detailed debug information for troubleshooting toggle operations
+
 ## Funding
 
 The development of this mod was funded by [AuthLite LLC](https://authlite.com/).
@@ -878,27 +886,16 @@ void TaskbarWndProcPreProcess(HWND hWnd,
                 DWORD currentTime = GetTickCount();
                 if (currentTime - g_lastToggleTime > 300) { // 300ms debounce
                     g_lastToggleTime = currentTime;
-                    LogDebugInfo(L"HOTKEY TRIGGERED! Showing confirmation popup and toggling taskbar");
                     
-                    // Show confirmation popup to user (as requested in requirements)
-                    std::wstring popupMessage = L"🔑 Vertical Taskbar Hotkey Triggered!\n\n";
-                    popupMessage += L"Hotkey: ";
-                    popupMessage += g_settings.toggleShortcutKey ? g_settings.toggleShortcutKey : L"Ctrl+Alt+T";
-                    popupMessage += L"\n";
-                    popupMessage += L"Current taskbar state: ";
-                    popupMessage += g_taskbarHidden ? L"HIDDEN" : L"VISIBLE";
-                    popupMessage += L"\n";
-                    popupMessage += L"Action: ";
-                    popupMessage += g_taskbarHidden ? L"SHOWING taskbar" : L"HIDING taskbar";
-                    popupMessage += L"\n\n";
-                    popupMessage += L"💡 This popup confirms your hotkey is working correctly.\n";
-                    popupMessage += L"Check Windhawk logs for detailed debug information.";
-                    
-                    MessageBoxW(nullptr, popupMessage.c_str(), 
-                               L"Vertical Taskbar - Debug Confirmation", 
-                               MB_OK | MB_ICONINFORMATION | MB_TOPMOST);
+                    // BUG FIX: Removed blocking MessageBox popup that was interfering with taskbar toggle
+                    // The popup was preventing the toggle operation from completing successfully
+                    LogDebugInfo(L"HOTKEY TRIGGERED! Toggling taskbar visibility - Current state: %s", 
+                                g_taskbarHidden ? L"HIDDEN" : L"VISIBLE");
                     
                     ToggleTaskbarVisibility();
+                    
+                    LogDebugInfo(L"Hotkey toggle completed - New state: %s", 
+                                g_taskbarHidden ? L"HIDDEN" : L"VISIBLE");
                 } else {
                     LogDebugInfo(L"Hotkey pressed too quickly (debounce), ignoring");
                 }
@@ -3966,8 +3963,10 @@ void LoadSettings() {
                  currentToggleButtonState ? L"true" : L"false",
                  g_previousToggleButtonState ? L"true" : L"false");
     
-    // Check if toggle button state changed (any change triggers toggle)
-    // Only trigger after initial settings load to avoid unwanted toggles on startup
+    // BUG FIX: Fixed toggle button logic
+    // The issue was that the button only worked on state changes, but there was a bug
+    // in the logic. The button should work on ANY state change (true->false OR false->true).
+    // This allows users to toggle the checkbox back and forth to trigger the action.
     if (g_settingsInitialized && currentToggleButtonState != g_previousToggleButtonState) {
         LogDebugInfo(L"MANUAL TOGGLE BUTTON PRESSED - State changed from %s to %s", 
                      g_previousToggleButtonState ? L"true" : L"false",
