@@ -237,8 +237,7 @@ std::atomic<bool> g_pendingMeasureOverride;
 std::atomic<bool> g_unloading;
 std::atomic<int> g_hookCallCounter;
 
-// Taskbar toggle functionality
-ATOM g_hotkeyId = 0;
+// Taskbar toggle functionality  
 HWND g_taskbarWnd = nullptr;
 bool g_previousToggleButtonState = false;
 bool g_settingsInitialized = false;
@@ -255,7 +254,7 @@ HWND g_startMenuWnd;
 HWND g_notificationCenterWnd;
 
 // Hotkey functionality globals
-int g_hotkeyId = 0;
+ATOM g_hotkeyId = 0;
 bool g_taskbarHidden = false;
 int g_originalTaskbarWidth = 0;
 DWORD g_lastToggleTime = 0;
@@ -587,11 +586,16 @@ bool RegisterTaskbarHotkey() {
         return false;
     }
 
-    // Use a unique ID for our hotkey - combination of mod name hash and a specific value
-    g_hotkeyId = 0x56545442; // "VTTB" (Vertical Taskbar Toggle Button) in hex
+    // Use GlobalAddAtom to get a unique ATOM ID for our hotkey
+    g_hotkeyId = GlobalAddAtomW(L"VerticalTaskbarToggle_" WH_MOD_ID);
+    if (g_hotkeyId == 0) {
+        Wh_Log(L"Failed to create hotkey atom, error: %d", GetLastError());
+        return false;
+    }
 
     if (!RegisterHotKey(nullptr, g_hotkeyId, hotkey.modifiers, hotkey.vk)) {
         Wh_Log(L"Failed to register hotkey, error: %d", GetLastError());
+        GlobalDeleteAtom(g_hotkeyId);
         g_hotkeyId = 0;
         return false;
     }
@@ -605,6 +609,7 @@ void UnregisterTaskbarHotkey() {
     if (g_hotkeyId != 0) {
         UnregisterHotKey(nullptr, g_hotkeyId);
         Wh_Log(L"Unregistered hotkey id=%d", g_hotkeyId);
+        GlobalDeleteAtom(g_hotkeyId);
         g_hotkeyId = 0;
     }
 }
@@ -825,7 +830,7 @@ void TaskbarWndProcPreProcess(HWND hWnd,
     switch (Msg) {
         case WM_HOTKEY: {
             // Handle our registered hotkey with debounce protection
-            if ((int)*wParam == g_hotkeyId) {
+            if ((ATOM)*wParam == g_hotkeyId) {
                 DWORD currentTime = GetTickCount();
                 if (currentTime - g_lastToggleTime > 300) { // 300ms debounce
                     g_lastToggleTime = currentTime;
@@ -900,7 +905,7 @@ LRESULT TaskbarWndProcPostProcess(HWND hWnd,
         case WM_HOTKEY: {
             if ((ATOM)wParam == g_hotkeyId) {
                 Wh_Log(L"Hotkey pressed - toggling taskbar autohide");
-                ToggleTaskbarAutohide();
+                ToggleTaskbarVisibility();
             }
             break;
         }
@@ -3838,52 +3843,12 @@ BOOL WINAPI SetWindowPos_Hook(HWND hWnd,
 
 }  // namespace CoreWindowUI
 
-// Taskbar toggle functionality
-HWND FindTaskbarWindow() {
-    if (g_taskbarWnd && IsWindow(g_taskbarWnd)) {
-        return g_taskbarWnd;
-    }
-    g_taskbarWnd = FindWindow(L"Shell_TrayWnd", nullptr);
-    return g_taskbarWnd;
-}
-
-bool GetTaskbarAutohideState() {
-    HWND hTaskbarWnd = FindTaskbarWindow();
-    if (!hTaskbarWnd) {
-        return false;
-    }
-
-    APPBARDATA msgData{};
-    msgData.cbSize = sizeof(msgData);
-    msgData.hWnd = hTaskbarWnd;
-    LPARAM state = SHAppBarMessage(ABM_GETSTATE, &msgData);
-    return (state & ABS_AUTOHIDE) != 0;
-}
-
-void SetTaskbarAutohide(bool enabled) {
-    HWND hTaskbarWnd = FindTaskbarWindow();
-    if (!hTaskbarWnd) {
-        return;
-    }
-
-    APPBARDATA msgData{};
-    msgData.cbSize = sizeof(msgData);
-    msgData.hWnd = hTaskbarWnd;
-    msgData.lParam = enabled ? ABS_AUTOHIDE : ABS_ALWAYSONTOP;
-    SHAppBarMessage(ABM_SETSTATE, &msgData);
-}
-
-void ToggleTaskbarAutohide() {
-    bool currentState = GetTaskbarAutohideState();
-    SetTaskbarAutohide(!currentState);
-    Wh_Log(L"Taskbar autohide toggled to: %s", !currentState ? L"enabled" : L"disabled");
-}
-
 // Parse hotkey string and register/unregister hotkey
 void ParseAndRegisterHotkey(PCWSTR hotkeyStr) {
     // Unregister previous hotkey
     if (g_hotkeyId != 0) {
         UnregisterHotKey(nullptr, g_hotkeyId);
+        GlobalDeleteAtom(g_hotkeyId);
         g_hotkeyId = 0;
     }
 
@@ -3961,8 +3926,8 @@ void ParseAndRegisterHotkey(PCWSTR hotkeyStr) {
     }
 
     if (vk != 0) {
-        // Generate unique hotkey ID
-        g_hotkeyId = GlobalAddAtom(L"TaskbarVerticalToggle");
+        // Generate unique hotkey ID using GlobalAddAtom
+        g_hotkeyId = GlobalAddAtomW(L"TaskbarVerticalToggle");
         if (g_hotkeyId != 0) {
             if (!RegisterHotKey(nullptr, g_hotkeyId, modifiers, vk)) {
                 Wh_Log(L"Failed to register hotkey: %s", hotkeyStr);
@@ -4028,7 +3993,7 @@ void LoadSettings() {
     // Check if toggle button state changed (any change triggers toggle)
     // Only trigger after initial settings load to avoid unwanted toggles on startup
     if (g_settingsInitialized && currentToggleButtonState != g_previousToggleButtonState) {
-        ToggleTaskbarAutohide();
+        ToggleTaskbarVisibility();
         Wh_Log(L"Toggle button changed, triggering taskbar toggle");
     }
     g_previousToggleButtonState = currentToggleButtonState;
